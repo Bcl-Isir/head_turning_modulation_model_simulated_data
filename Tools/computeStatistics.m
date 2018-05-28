@@ -8,17 +8,8 @@ function statistics = computeStatistics (htm)
     
     % textprogressbar('HTM: computing statistics -- ');
     
-    p = getInfo('audio_labels'    ,...
-                'visual_labels'   ,...
-                'nb_audio_labels' ,...
-                'nb_visual_labels',...
-                'nb_labels'       ,...
-                'AVPairs'         ,...
-                'nb_AVPairs'      ,...
-                'nb_steps'         ...
-               );
+    p = getInfo('all');
 
-    % htm.statistics.mfi = [htm.statistics.mfi; zeros(p.nb_steps, 1)];
     htm.statistics.mfi = [htm.statistics.mfi; zeros(p.nb_steps, 1)];
     htm.statistics.mfi_mean = zeros(htm.nb_steps_final, 1);
     
@@ -26,7 +17,9 @@ function statistics = computeStatistics (htm)
     
     htm.statistics.mfi_mean = cumsum(htm.statistics.mfi) ./ (1:htm.nb_steps_final)';
 
-    % return;
+    htm.statistics.max_mean_shm = cumsum(htm.statistics.max_shm) ./ (1:htm.nb_steps_final)';
+
+    return;
 
     % =====================
 
@@ -54,13 +47,23 @@ function statistics = computeStatistics (htm)
     end
 
     sc = getInfo('scenario');
+    m = numel(sc.unique_idx)*numel(vec);
+    cpt = 0;
 
     for iLabel = sc.unique_idx
-        disp(iLabel);
+        cpt = cpt+1;
+        n = find(iLabel == sc.unique_idx);
 
         d = generateProbabilities(audio_idx(iLabel), visual_idx(iLabel), 100);
 
         for jj = 1:numel(vec)
+
+            % --- DISPLAY --- %
+            tt = ((cpt-1)*numel(vec)) + jj;
+            t = 100*(tt/m);
+            textprogressbar(t);
+            % --- DISPLAY --- %
+
             da = d;
             da(audio_idx(iLabel), :) = vec(jj);
             est = arrayfun(@(x) mfi.inferCategory(da(:, x)), 1:100, 'UniformOutput', false);
@@ -139,8 +142,9 @@ function statistics = computeStatistics (htm)
     htm.MSOM.assignNodesToCategories();
 
     % =====================
-
-    % textprogressbar(' -- DONE');
+    % --- DISPLAY --- %
+    textprogressbar(' -- DONE');
+    % --- DISPLAY --- %
 
     return;
 

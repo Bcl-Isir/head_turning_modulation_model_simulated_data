@@ -1,11 +1,17 @@
-function request = getCategory (obj, idx, field)
+function request = getCategory (obj, idx, field, varargin)
 
-    if isa(obj, 'Robot')
-        obs_cat = obj.getEnv().observed_categories;
-    elseif isa(obj, 'PerceivedEnvironment')
-        obs_cat = obj.observed_categories;
+    if isa(obj, 'PerceivedEnvironment')
+        % obs_cat = obj.DW.observed_categories;
+        obs_cat = obj.MFI.observed_categories;
     elseif isa(obj, 'HeadTurningModulationKS')
-        obs_cat = obj.robot.getEnv().observed_categories;
+        % obs_cat = obj.DW.observed_categories;
+        obs_cat = obj.MFI.observed_categories;
+    % elseif isa(obj, 'DynamicWeighting')
+    elseif isa(obj, 'MultimodalFusionAndInference')
+        obs_cat = obj.observed_categories;
+    else
+        % obs_cat = obj.htm.DW.observed_categories;
+        obs_cat = obj.htm.MFI.observed_categories;
     end
 
     if isempty(obs_cat)
@@ -16,6 +22,14 @@ function request = getCategory (obj, idx, field)
     if nargin == 2
         field = 'all';
     end
+
+    if nargin == 4 && strcmp(varargin{1}, 'Object')
+        idx = getObject(obj, idx, 'audiovisual_category');
+    elseif nargin == 3 && strcmp(field, 'Object')
+        idx = getObject(obj, idx, 'audiovisual_category');
+        field = 'all';
+    end
+
 
     % if strcmp(field, 'all')
     %     idx = 1:numel(objects);
@@ -41,10 +55,8 @@ function request = getCategory (obj, idx, field)
 
     for iField = 1:numel(field)
         fname = char(field(iField));
-        request.(fname) = arrayfun(@(x) obs_cat{x}.(field{iField}), idx, 'UniformOutput', false);
-        % request{iField} = arrayfun(@(x) obs_cat{x}.(field{iField}), idx, 'UniformOutput', false);
+        request.(fname) = cell2mat(arrayfun(@(x) obs_cat{x}.(field{iField}), idx, 'UniformOutput', false));
     end
-    % request = request{:};
 
     if numel(field) == 1
         request = request.(fname);

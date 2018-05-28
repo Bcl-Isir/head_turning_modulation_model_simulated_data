@@ -1,152 +1,240 @@
-function initializeParameters (nb_steps, scene)
+function initializeParameters (htm, new)
+% initializeParameters function
+% This function creates the INFO variable which will be used all along the simulations.
+% It cares all the needed information for the system to work, depending also on the user inputs.
+% The file 'Config.xml' is used to retrieve some of the user parameters.
+% These audiovisual pairs are listed in the 'AVPairs.xml' file and the indexes refer to the lines of this file.
 
-    disp('HTM: initialization of parameters');
-    pause(0.25);
-    disp('..................................................');
-	
-    information = struct('audio_labels'    , [],...
-						 'visual_labels'   , [],...
-						 'nb_audio_labels' , 0 ,...
-						 'nb_visual_labels', 0 ,...
-						 'nb_labels'	   , 0 ,...
-						 'AVPairs'		   , 0 ,...
-						 'nb_AVPairs'	   , 0 ,...
-						 'fov'			   , 0 ,...
-						 'distance_max'	   , 0 ,...
-						 'nb_angles'	   , 0 ,...
-						 'sources_position', [],...
-						 'obs_struct'	   , [],...
-						 'statistics'	   , [],...
-						 'thr_epsilon'	   , 0 ,...
-						 'thr_wrong'       , 0 ,...
-                         'nb_steps'        , 0 ,...
-                         'cpt_silence'     , 0 ,...
-                         'cpt_object'      , 0 ,...
-                         'scenario'        , []...
-                         );
-
-
-    % ================ %
-    % === EDITABLE === %
-    % ================ %
-    % --- Field of view of the robot
-    information.fov = 30;
-    % --- Max distance of an object to the robot
-    information.distance_max = 4;
-    % --- Number of sound sources
-
-    % --- Thresholds used for experts outputs emulation
-    % --- Minimum
-    information.thr_epsilon = 0.7;
-    % --- Wrong AV Pair
-    information.thr_wrong = 0.3;
-
-    information.smoothing = 1;
-    % --- ???
-    % information.thr_both = 1;
-    
-    % information.cpt_object = 30;
-    % information.cpt_silence = 10;
-    % information.cpt_simulation = 0;
-
-    % --- Performance criterion
-    information.q = 0.75;
-
-    information.cpt_silence = 10;
-    information.cpt_object = 30;
-
-
-    % =========================================================================== %
-    % =========================================================================== %
-    % =========================================================================== %
-
-    % =================== %
-    % === DO NOT EDIT === %
-    % =================== %
-    % --- Retrieve audiovisual pairs from 'AVPairs.xml' file
-    % --- 'AVPairs.xml' can be edited
-    [AVPairs, audio_labels, visual_labels] = retrieveAudioVisualLabels();
-
-    information.nb_angles = numel(AVPairs);
-    % --- Positions of the sound sources.
-    % --- They are here plaed regularly around the robot,
-    % --- outside the field of view of the robot when at resting state
-    information.sources_position = linspace(information.fov+1,...
-                                            360-information.fov-1,...
-                                            information.nb_angles);
-
-    information.audio_labels    = audio_labels;
-    information.nb_audio_labels = numel(information.audio_labels);
-
-    information.visual_labels    = visual_labels;
-    information.nb_visual_labels = numel(information.visual_labels);
-
-    information.AVPairs    = AVPairs;
-    information.nb_AVPairs = numel(information.AVPairs);
-
-    information.nb_labels = information.nb_audio_labels + information.nb_visual_labels;
-
-    information.obs_struct = struct('label'     , 'none_none',...
-                                    'perf'      , 0,...
-                                    'nb_goodInf', 0,...
-                                    'nb_inf'    , 0,...
-                                    'cpt'       , 0,...
-                                    'proba'     , 0);
-                                
-    information.statistics = struct('max'     , [], ...
-                                    'max_mean', [],...
-                                    'mfi'     , [],...
-                                    'mfi_mean', [],...
-                                    'alpha_a' , 0,...
-                                    'alpha_v' , 0,...
-                                    'beta_a'  , 0,...
-                                    'beta_v'  , 0,...
-                                    'c'       , [],...
-                                    'vec'     , [0 :0.1: 1]...
-                                   );
-
-    information.plot_fcn = {'focus'         ,...
-                            'goodClassif'   ,...
-                            'goodClassifObj',...
-                            'shm'           ,...
-                            'hits'          ,...
-                            'headMovements' ,...
-                            'statistics'     ...
-                            };
-
-    if scene == 0
-        scene = 1:numel(AVPairs);
-    elseif scene(end) > numel(AVPairs)
-        scene(end) = numel(AVPairs);
+% --- Clear previous figure from a previous simulation
+if nargin == 1
+    figs = get(0, 'Children');
+    if ~isempty(figs)
+        for iFig = 1:numel(figs)
+            if strcmp(get(figs(iFig), 'Tag'), 'EMKS')
+                delete(figs(iFig));
+            end
+        end
     end
+end
 
-    information.scenario = struct('idx'       , 1        ,...
-                                  'scene'     , {{scene}},...
-                                  'unique_idx', {scene}   ...
-                                 );
+disp('HTM: initialization of parameters');
+pause(0.25);
+disp('..................................................');
 
-    % [information.nb_objects, information.nb_steps] = adjustLength(nb_steps);
+global information info_fnames CONFIG_FILE;
 
-    
-    s = information.cpt_silence + information.cpt_object;
-    nb_objects = ceil(nb_steps / s);
-    
-    information.nb_steps = nb_objects * s;
+information = struct('audio_labels'           , []   ,...
+                     'AVPairs'                , 0    ,...
+                     'cpt_object'             , 0    ,...
+                     'cpt_silence'            , 0    ,...
+                     'distances'              , []   ,...
+                     'distance_max'           , 0    ,...
+                     'epsilon'                , 0    ,...
+                     'fov'                    , 0    ,...
+                     'lambda'                 , 0    ,...
+                     'load'                   , false,...
+                     'load_timeline'          , false,...
+                     'modules'                , 0    ,...
+                     'nb_audio_labels'        , 0    ,...
+                     'nb_AVPairs'             , 0    ,...
+                     'nb_labels'              , 0    ,...
+                     'nb_simultaneous_sources', 0    ,...
+                     'nb_sources'             , 0    ,...
+                     'nb_steps'               , 0    ,...
+                     'nb_visual_labels'       , 0    ,...
+                     'notification'           , []   ,...
+                     'obs_struct'             , []   ,...
+                     'persistance'            , 0    ,...
+                     'q'                      , 0    ,...
+                     'repartition'            , []   ,...
+                     'smoothing'              , 0    ,...
+                     'sources_position'       , []   ,...
+                     'statistics'             , []   ,...
+                     'scenario'               , []   ,...
+                     'thr_theta'              , 10   ,...
+                     'timeline'               , []   ,...
+                     'visual_labels'          , []);
+					 
+path_to_folder = '../../examples/attention_simulation';
 
-    information.nb_objects = nb_objects;
+config_file = xmlread([path_to_folder, filesep, 'Config', num2str(CONFIG_FILE), '.xml']);
 
-    if isappdata(0, 'msom_weights')
-        rmappdata(0, 'msom_weights');
+parameters = config_file.getElementsByTagName('pair');
+
+nb_parameters = parameters.getLength();
+
+for iPair = 0:nb_parameters-1
+    pair = parameters.item(iPair);
+
+    parameter = char(pair.getAttribute('parameter'));
+    value = char(pair.getAttribute('value'));
+    if ~strcmp(parameter, 'notification')
+        if strcmp(parameter, 'avpairs')
+            scene = str2num(value);
+        else
+            value = str2num(value);
+        end
     end
+    information.(parameter) = value;
+end
 
-    setappdata(0, 'information', information);
+information = rmfield(information, 'avpairs');
 
-    pause(0.1);
-    disp('PARAMETERS OF CURRENT SIMULATION:');
-    disp(information);
+if isappdata(0, 'param_simu')
+    param = getappdata(0, 'param_simu');
+    information.epsilon = param.epsilon;
+    information.nb_sources = param.nb_sources;
+    information.nb_simultaneous_sources = param.nb_simultaneous_sources;
+    information.scene = param.scene;
+    information.nb_iterations = param.nb_iterations;
+end
 
-    pause(0.1);
+% if isappdata(0, 'tline')
+%     information.load_timeline = true;
+% end
 
-    disp('HTM: initialization of parameters -- DONE');
+% =========================================================================== %
+% =========================================================================== %
+% =========================================================================== %
+
+% --- Retrieve audiovisual pairs from 'AVPairs.xml' file
+% --- 'AVPairs.xml' can be edited
+[AVPairs, audio_labels, visual_labels] = retrieveAudioVisualLabels();
+
+% information.nb_angles = numel(AVPairs);
+% information.nb_angles = numel(information.nb_sources);
+% --- Positions of the sound sources.
+% --- They are here plaed regularly around the robot,
+% --- outside the field of view of the robot when at resting state
+% information.sources_position = linspace(information.fov+1,...
+%                                         360-information.fov-1,...
+%                                         information.nb_angles);
+
+% --- Determining the sources position in a 2D environment
+if information.nb_sources == 1
+    beg = 45;
+else
+    beg = 45;
+end
+
+if information.modules == 1
+    tmp = [290:5:345, 15:5:70];
+    idx = linspace(1, numel(tmp), information.nb_sources);
+    idx = round(idx);
+    information.sources_position = tmp(idx);
+else
+    tmp_sources_angular_pos = linspace(beg,...
+                                       340,...
+                                       information.nb_sources+1);
+    tmp_sources_angular_pos = round(tmp_sources_angular_pos);
+    information.sources_position = tmp_sources_angular_pos(1:end-1);
+end
+
+information.distances = rand(1, information.nb_sources) + randi([4, 7], 1, information.nb_sources);
+% d(d <= 3) = d(d <= 3) + 3;
+% d(d >= information.distance_max) = d(d >= information.distance_max) - 1.5;
+% if d <= 3
+%     d = d+4;
+% end
+%information.distances = d;
+
+% avpairs = mergeLabels(AVPairs(scene));
+
+% information.positions = [avpairs, information.sources_position'];
+
+information.audio_labels    = audio_labels;
+information.nb_audio_labels = numel(information.audio_labels);
+
+information.visual_labels    = visual_labels;
+information.nb_visual_labels = numel(information.visual_labels);
+
+information.AVPairs    = AVPairs;
+information.nb_AVPairs = numel(information.AVPairs);
+
+information.nb_labels = information.nb_audio_labels + information.nb_visual_labels;
+
+information.obs_struct = struct('label'     , 'none_none',...
+                                'perf'      , 0,...
+                                'nb_goodInf', 0,...
+                                'nb_inf'    , 0,...
+                                'cpt'       , 0,...
+                                'proba'     , 0,...
+                                'congruence', 0 ...
+                               );
+                            
+information.statistics = struct('max'         , []        ,...
+                                'max_mean'    , []        ,...
+                                'max_mean2'    , []        ,...
+                                'max_shm'     , []        ,...
+                                'max_mean_shm', []        ,...
+                                'mfi'         , []        ,...
+                                'mfi_mean'    , []        ,...
+                                'mfi_mean2'    , []        ,...
+                                'alpha_a'     , 0         ,...
+                                'alpha_v'     , 0         ,...
+                                'beta_a'      , 0         ,...
+                                'beta_v'      , 0         ,...
+                                'c'           , []        ,...
+                                'vec'         , [0 :0.1: 1]...
+                               );
+
+% information.plot_fcn = {'focus'         ,...
+%                         'goodClassif'   ,...
+%                         'goodClassifObj',...
+%                         'shm'           ,...
+%                         'hits'          ,...
+%                         'headMovements' ,...
+%                         'statistics'     ...
+%                        };
+
+if scene == 0
+    scene = 1:numel(AVPairs);
+elseif scene(end) > numel(AVPairs)
+    scene(scene > numel(AVPairs)) = [];
+end
+
+information.scenario = struct('idx'       , 1        ,...
+                              'scene'     , {{scene}},...
+                              'unique_idx', {scene}   ...
+                             );
+
+if ~htm.load
+    information.repartition = assignSource(scene, information.nb_sources);
+else
+    information.repartition = getappdata(0, 'repartition');
+end
+
+% [information.nb_events, information.nb_steps] = adjustLength(nb_steps);
+
+
+% nb_steps = information.nb_steps;
+% s = information.cpt_silence + information.cpt_object;
+% nb_events = ceil(nb_steps / s);
+
+% information.nb_steps = nb_events * s;
+
+% information.nb_events = nb_events;
+
+information.nb_simultaneous_sources = min([information.nb_sources, information.nb_simultaneous_sources]);
+
+if isappdata(0, 'msom_weights')
+    rmappdata(0, 'msom_weights');
+end
+
+setappdata(0, 'information', information);
+
+if ~htm.load
+    initializeScenario(htm);
+end
+
+info_fnames = fieldnames(information);
+
+pause(0.1);
+disp('PARAMETERS OF CURRENT SIMULATION:');
+disp(information);
+
+pause(0.1);
+
+disp('HTM: initialization of parameters -- DONE');
 
 end

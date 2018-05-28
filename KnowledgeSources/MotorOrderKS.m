@@ -1,13 +1,20 @@
+% 'MotorOrderKS' class
+% Author: Benjamin Cohen-Lhyver
+% Date: 01.06.16
+% Rev. 1.0
 classdef MotorOrderKS < handle
 
 % ======================== %
 % === PROPERTIES [BEG] === %
 % ======================== %
 properties (SetAccess = public, GetAccess = public)
-    head_position = 0;
-    head_position_hist = [];
+    head_position = [];
+    motor_order = [];
     htm;
+    RIR;
+    FCKS;
 
+    shm = 0;
 end
 % ======================== %
 % === PROPERTIES [END] === %
@@ -18,43 +25,69 @@ end
 % ===================== %
 methods
 
-% ========================= %
 % === CONSTRUCTOR [BEG] === %
-% ========================= %
-function obj = MotorOrderKS (htm)
-	% obj.RIR = htm.RIR;
+function obj = MotorOrderKS (htm, FCKS)
 	obj.htm = htm;
+    obj.RIR = htm.RIR;
+    obj.FCKS = FCKS;
+    obj.head_position = 0;
 end
+% === CONSTRUCTOR [END] === %
 
-function moveHead (obj)
-	RIR = obj.htm.RIR;
+function execute (obj)
     % --- If no sound -> make the head turn to 0° (resting state)
-    focus = RIR.focus;
+    % --- Change to getLastHypothesis
+    focus = obj.FCKS.focus(end);
 
-    if obj.isFocusedObjectPresent() && focus ~= 0
-        % theta = obj.motorOrder();
-        theta = getObject(RIR, RIR.focus, 'theta');
-        % obj.RIR.updateAngle(0);
-        setObject(RIR, 0, 'theta', 0);
-        %RIR.getLastObj().theta = 0;
-    else
-        theta = -obj.head_position;
+    if focus ~= 0
+        theta = getObject(obj, focus, 'theta');
+        theta = theta(end);
+    elseif focus == 0
+        theta = -obj.head_position(end);
     end
-    obj.head_position = mod(theta+obj.head_position, 360) ;
-    obj.head_position_hist(end+1) = obj.head_position;
+
+    % if ~obj.isFocusedObjectPresent(focus)
+        % theta = -obj.head_position(end);
+    % end
+
+    obj.motor_order(end+1) = theta;
+    
+
+    if numel(obj.head_position) > 1
+        obj.head_position(end+1) = mod(obj.head_position(end)+theta, 360);
+    else
+        obj.head_position(end+1) = theta;
+    end
+    
+    obj.RIR.head_position = obj.head_position;
+
+    obj.computeSHM();
 end
 
-function bool = isFocusedObjectPresent (obj)
-	RIR = obj.htm.RIR;
-    if isempty(RIR.getEnv().present_objects)
-        bool = false ;
-    elseif find(RIR.focus == RIR.getEnv().present_objects)
-        bool = true ;
+function bool = isFocusedObjectPresent (obj, focus)
+    if obj.RIR.nb_objects == 0 && focus ~= 0
+        bool = false;
+    elseif getObject(obj, focus, 'presence')
+        bool = true;
     else
-        bool = false ;
+        bool = false;
     end
 end
 
+function computeSHM (obj)
+    if numel(obj.motor_order) > 1
+        if obj.motor_order(end-1) ~= obj.motor_order(end) && obj.motor_order(end) > 0
+            obj.shm = obj.shm+1;
+        end
+    end
 end
 
+
+% ===================== %
+% === METHODS [END] === %
+% ===================== %
+end
+% =================== %
+% === END OF FILE === %
+% =================== %
 end

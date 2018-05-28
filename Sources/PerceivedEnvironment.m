@@ -1,374 +1,335 @@
 % 'PerceivedEnvironment' class
 % This class is part of the HeadTurningModulationKS
+% It implements the Environment the robot is currently exploring.
+% This class enables it to gather:
+% 		1. the congruence distribution of the AV categories it has created
+% 		2. the audiovisual objects it has already observed in it.
 % Author: Benjamin Cohen-Lhyver
 % Date: 01.02.16
 % Rev. 2.0
 
 classdef PerceivedEnvironment < handle
 
-% === Properties (BEG) === %
+% ======================== %
+% === PROPERTIES [BEG] === %
+% ======================== %
 properties (SetAccess = public, GetAccess = public)
     present_objects = [] 	 ; % objects present in the environment
     objects 		= cell(0); % all detected objects 
-    MFI;
-    labels = {};
-    nb_classes = 0;
-    observed_categories = cell(0);
-    RIR;
+    htm;
+    RIR;					% --- Robot Internal Representation
+    MFI;					% --- Multimodal Fusion & Inference module
+    MSOM;					% --- Multimodal Self Organizing Map
+    DW;						% --- Dynamic Weighting module
+    behavior = 0;
+    classes = [];
+    behavior_hist = [];
+    temp_dw;
 end
-% === Properties (END) === %
+% ======================== %
+% === PROPERTIES [END] === %
+% ======================== %
 
-% === Methods (BEG) === %
+% ===================== %
+% === METHODS [BEG] === %
+% ===================== %
 methods
-% --- Constructor (BEG) --- %
-function obj = PerceivedEnvironment (RIR)
-	% obj = obj@RIR();
-	obj.RIR = RIR;
-	obj.MFI = RIR.MFI;
 
-	% --- Initialize categories
-	obj.observed_categories{1} = getInfo('obs_struct');
+% === Constructor [BEG] === %
+function obj = PerceivedEnvironment (RIR)
+	obj.RIR  = RIR; 	   % --- Robot Internal Representation
+	obj.htm  = RIR.htm;    % --- Head Turning Modulation
+	obj.MFI  = RIR.MFI;    % --- Multimodal Fusion & Inference module
+	obj.MSOM = RIR.MSOM;   % --- Multimodal SelfOrganizing Map
+	obj.DW   = DynamicWeighting(RIR.htm); % --- Dynamic Weighting module
 end
-% --- Constructor (END) --- %
+% === Constructor [END] === %
 
 % --- Other methods --- %
-% function addObject (obj, data, theta, d)
-% 	% --- Create a new PERCEIVEDOBJECT object
-%     obj.objects{end+1} = PerceivedObject(data, theta, d);
-%     obj.addInput();
-% end
-
-function addObject (obj)
+function addObject (obj, iSource)
+    iStep = obj.htm.iStep;
+    theta = getLastHypothesis(obj, 'ALKS');
+    theta = theta(iSource);
+    theta_v = getLastHypothesis(obj, 'VLKS');
 	% --- Create a new PERCEIVEDOBJECT object
-    obj.objects{end+1} = PerceivedObject(obj.RIR.data(:, end)   ,...
-    									 obj.RIR.theta_hist(end),...
-    									 obj.RIR.dist_hist(end)  ...
-    									);
-    obj.addInput();
+    obj.objects{end+1} = PerceivedObject(obj.htm.data{iSource}(:, obj.htm.iStep),...
+    									 theta,...
+    									 theta_v,...
+    									 iSource);
+	obj.objects{end}.updateTime(obj.htm.iStep);
+	obj.parseEnvironments();
+    obj.addInput(iSource);
 end
 
-function addInput (obj)
+function parseEnvironments (obj)
+	similar_env = 0;
+	for iEnv = 1:numel(obj.RIR.environments)-1
+		env = obj.RIR.environments{iEnv};
+		classes_idx = env.DW.classes;
+		labels = cell(numel(classes_idx), 1);
+		for iClass = 1:numel(classes_idx)
+			labels{iClass} = env.DW.observed_categories{classes_idx(iClass)}.label;
+		end
+		tmp = zeros(1, numel(obj.objects));
+		for iObject = 1:numel(obj.objects)
+            if strcmp(obj.objects{iObject}.label, 'none_none')
+                tt = - 1;
+            else
+                tt = find(strcmp(labels, obj.objects{iObject}.label));
+            end
+			if ~isempty(tt)
+				tmp(iObject) = tt;
+			end
+		end
+		if all(tmp > 0)
+			similar_env = iEnv;
+        elseif ~isempty(find(tmp == -1))
+            if isempty(obj.behavior_hist)
+                similar_env = 0;
+            else
+                similar_env = obj.behavior_hist(end);
+            end
+		end
+	end
+	% similar_env
+	if similar_env == 0
+		obj.behavior = numel(obj.RIR.environments);
+		obj.classes = obj.DW.classes;
+	else
+		obj.behavior = similar_env;
+		obj.classes = obj.RIR.environments{obj.behavior}.DW.classes;
+		if obj.behavior_hist(end) ~= obj.behavior
+			obj.createTemporaryDW();
+		end
+	end
+	obj.behavior_hist(end+1) = obj.behavior;
+end
+
+function createTemporaryDW (obj)
+	env = getEnvironment(obj, obj.behavior);
+	obj.temp_dw = DynamicWeighting(obj.htm, env.DW.source_env);
+	dw = getEnvironment(obj.htm, obj.behavior, 'DW');
+	% obj.temp_dw.observed_categories = dw.observed_categories;
+	obj.temp_dw.classes = dw.classes;
+	obj.temp_dw.nb_classes = dw.nb_classes;
+	obj.temp_dw.execute();
+end
+
+function addInput (obj, iSource)
+    iObj = getLastHypothesis(obj, 'ODKS', 'id_object');
+    iObj = iObj(iSource);
 	% --- No data missing
-	if ~obj.objects{end}.requests.missing
+	if ~obj.objects{iObj}.requests.missing
 		% --- Train nets
-		% obj.MFI.newInput(obj.objects{end}.getBestData()) ;
-        data = retrieveObservedData(obj, 0, 'best');
-		obj.MFI.newInput(data);
-		% obj.MFI.newInput(obj.objects{end}.data(:, end)) ;
+        data = retrieveObservedData(obj, iObj, 'best');
+		obj.MFI.newInput(data, iObj);
 	end
 end
 
-function updateLabel (obj, data)
-	% obj.noveltyDetection(data) ;
-	obj.objects{end}.addData(data) ;
-	obj.addInput() ;
-end
+function updateObjectData (obj, iSource)
+	iObj = getLastHypothesis(obj, 'ODKS', 'id_object');
+    iObj = iObj(iSource);
+    
+    data = obj.htm.data{iSource}(:, obj.htm.iStep);
+	
+	theta = getLastHypothesis(obj, 'ALKS');
+    theta = theta(iSource);
+	
+	theta_v = getLastHypothesis(obj, 'VLKS');
+	
+	obj.objects{iObj}.updateData(data, theta, theta_v);
+	obj.objects{iObj}.updateTime(obj.htm.iStep);
 
-function updateObjectData (obj, data, theta, d)
-	obj.objects{end}.updateData(data, theta, d);
-	% obj.objects{end}.addData(data);
-	% obj.objects{end}.updateAngle(theta);
-	% obj.objects{end}.updateDistance(d);
-	obj.addInput();
-end
-
-% function data = getObjectData (obj, idx, str)
-% 	if idx == 0
-% 		idx = numel(obj.objects);
-% 	end
-% 	data = retrieveObservedData(obj, idx, str);
-% 	% tmIdx = obj.objects{idx}.tmIdx;
-% 	% data = obj.data
-% end
-
-% function noveltyDetection (obj, data)
-% 	if isempty(obj.preclasses)
-% 		obj.preclasses{1} = data ;
-% 		return ;
-% 	end
-% 	for iPreclass = 1:numel(obj.preclasses)
-% 		x = corr(obj.preclasses{iPreclass}, data) ;
-% 		NEW_CLASS = true ;
-% 		if x > 0.8
-% 			obj.preclasses{iPreclass} = mean([obj.preclasses{iPreclass}, data]) ;
-% 			NEW_CLASS = false ;
-% 		end
-% 	end
-% 	obj.TRIGGER_LEARNING = false ;
-% 	if NEW_CLASS
-% 		obj.preclasses{end+1} = data ;
-% 		obj.TRIGGER_LEARNING = true ;
-% 	end
-% end
-
-% function trainMSOM (obj)
-% 	obj.MFI.trainMSOM();
-% end
-
-%%set quality threshold
-% function setQ (obj, qThreshold)
-% 	obj.q = qThreshold ;
-% end
-
-function setClasses (obj)
-	if isempty(obj.MFI.categories)
-		obj.MFI.setCategories();
-	end
-	categories = obj.MFI.getCategories();
-	for iClass = 1:numel(categories)
-		% labels = obj.getCategories('label') ;
-		search = find(strcmp(categories{iClass}, obj.labels));
-		if isempty(search)
-			obj.createNewCategory(categories{iClass});
-		end			
-	end
-end
-
-function createNewCategory (obj, label)
-	obj.observed_categories{end+1} = getInfo('obs_struct');
-	obj.observed_categories{end}.label = label;
-	obj.labels = [obj.labels, label];
+	obj.parseEnvironments();
+	
+	obj.addInput(iSource);
 end
 
 function checkInference (obj)
-	labels = obj.labels ;
-	for iObj = obj.present_objects
-		% --- If an inference has been requested
-		if obj.objects{iObj}.requests.inference
-			% --- If visual data is still not available
-			if obj.objects{iObj}.requests.missing
-				% --- If a CHECK has been requested (-> motor order)
-				if obj.objects{iObj}.requests.check
-					% --- Continue to turn the head to the object
-				% --- If a CHECK has not been yet requested -> trigger the motor order
-				else
-					% --- Simulate an AV inference
-                    data = retrieveObservedData(obj, iObj, 'best');
-					AVClass = obj.MFI.inferCategory(data);
-					search = find(strcmp(AVClass, labels)) ;
-					% --- If the category has been correctly inferred in the past
-					% --- CHECK is not needed -> we trust the inference
-					if obj.isPerformant(search) 
-						if numel(obj.objects{iObj}.tmIdx) >= 1
-							obj.objects{iObj}.requests.check = false ;
-							obj.objects{iObj}.requests.verification = false ;
-							obj.objects{iObj}.setLabel(AVClass) ;
-							obj.objects{iObj}.cat = search ;
-						end
-					% --- If the category has not been well infered in the past
-					% --- CHECK is needed -> we don't trust the inference
-					else
-						% --- Request a CHECK of infered AV vs observed AV
-						obj.objects{iObj}.requests.check = true ;
-						obj.objects{iObj}.requests.label = AVClass ;
-						obj.observed_categories{search}.nb_inf = obj.observed_categories{search}.nb_inf + 1 ;
-					end
+	for iObj = obj.present_objects'
+		[inference, missing, check, verification, label] = obj.getObjectRequests(iObj);
+		if inference && missing % --- If an inference has been requested & data is missing
+			if check % --- If a CHECK has been requested (-> motor order)
+				     % --- Continue to turn the head to the object
+				[AVClass, search] = obj.simulateAVInference(iObj);
+				if isPerformant(obj, search)
+					obj.preventVerification(iObj, search, AVClass);
 				end
+			else % --- If a CHECK has not been yet requested: trigger a motor order?
+				[AVClass, search] = obj.simulateAVInference(iObj);
+				% if ~strcmp(AVClass, 'none_none')
+					if isPerformant(obj, search) % --- If the category has been correctly inferred in the past: CHECK not needed
+						obj.preventVerification(iObj, search, AVClass);
+					else % --- If the cat. hasn't been well infered in the past -> CHECK needed
+						obj.requestVerification(iObj, AVClass);
+						% obj.DW.updateInferenceCpt(AVClass, search);
+						obj.MFI.updateInferenceCpt(AVClass, search);
+					end
+				% end
 			end
-		% --- If no inference requested (AV data available)
-		% --- But a verification is requested
+		% --- If no inference requested (AV data available) but a verification is requested
 		% --- ADD A VERIFICATION WITH NO CHECK in order to verify the inference in the case we have AV thanks to DWmod
-		elseif obj.objects{iObj}.requests.verification
-			% --- We now have the full AV data
-            data = retrieveObservedData(obj, iObj, 'best');
-			AVClass = obj.MFI.inferCategory(data);
-			search = find(strcmp(AVClass, labels)) ;
-			% --- If infered AV is the same as observed AV
-			if strcmp(AVClass, obj.objects{iObj}.requests.label)
-				obj.objects{iObj}.requests.verification = false ;
-				obj.objects{iObj}.requests.check = false ;
-
-				obj.observed_categories{search}.nb_goodInf = obj.observed_categories{search}.nb_goodInf+1 ;
-
-				obj.objects{iObj}.setLabel(AVClass) ;
-				obj.objects{iObj}.cat = search ;
-			% --- If infered AV is NOT the same as observed AV
-			else
+		elseif verification
+			[AVClass, search] = obj.simulateAVInference(iObj);
+			if strcmp(AVClass, label) && ~strcmp(AVClass, 'none_none') % --- If inferred AV is the same as observed AV
+				obj.preventVerification(iObj, search, AVClass);
+				% obj.DW.updateGoodInferenceCpt(AVClass, search);
+				obj.MFI.updateGoodInferenceCpt(AVClass, search);
+				obj.objects{iObj}.requests.checked = true;
+			else % --- If infered AV is NOT the same as observed AV
+                obj.objects{iObj}.requests.label = AVClass;
 				% --- Make the network learn with n more iterations
-				obj.highTrainingPhase() ;
+				% obj.highTrainingPhase();
+				% obj.objects{iObj}.requests.verification = true;
 			end
-		% Else if all data available
-		elseif ~obj.objects{iObj}.requests.missing
-			% --- Infer AV class
-            data = retrieveObservedData(obj, iObj, 'best');
-			AVClass = obj.MFI.inferCategory(data);
-			search = find(strcmp(AVClass, labels));
-
-			obj.objects{iObj}.setLabel(AVClass);
-			obj.objects{iObj}.cat = search;
+		elseif ~missing % All data available
+			[AVClass, search] = obj.simulateAVInference(iObj);
+			obj.objects{iObj}.setLabel(AVClass, search);
 			obj.objects{iObj}.requests.check = false;
 		end
 	end
 end
 
+% === Request a CHECK of infered AV vs observed AV
+function requestVerification (obj, iObj, AVClass)
+	obj.objects{iObj}.requests.check = true;
+	obj.objects{iObj}.requests.verification = true;
+	obj.objects{iObj}.requests.label = AVClass;
+end
+
+function preventVerification (obj, iObj, search, AVClass)
+	if numel(obj.objects{iObj}.tmIdx) > 0
+		obj.objects{iObj}.requests.check = false;
+		obj.objects{iObj}.requests.verification = false;
+		obj.objects{iObj}.requests.inference = false;
+		obj.objects{iObj}.setLabel(AVClass, search);
+	end
+end
+
+function [AVClass, search] = simulateAVInference (obj, iObj)
+    if getInfo('modules') ~= 1
+    	data = retrieveObservedData(obj, iObj, 'best');
+		AVClass = obj.MFI.inferCategory(data);
+	% search = find(strcmp(AVClass, obj.DW.labels));
+		search = find(strcmp(AVClass, obj.MFI.labels));
+	elseif getInfo('modules') == 1
+        
+		rep = getInfo('repartition');
+		scenario = getInfo('scenario');
+		avpairs = getInfo('AVPairs');
+		avpairs = avpairs(scenario.scene{end});
+		source = getObject(obj, iObj, 'source');
+
+		for ii = 1:numel(rep)
+			if find(rep{ii} == source)
+				idx = ii;
+			end
+		end
+		
+		AVClass = avpairs{idx};
+		AVClass = strjoin(AVClass, '_');
+
+		search = find(strcmp(AVClass, obj.MFI.labels));
+	end
+
+	if isempty(search)
+		obj.MFI.createNewCategory(AVClass);
+		search = find(strcmp(AVClass, obj.MFI.labels));
+	end
+end
+
+function [inference, missing, check, verification, label] = getObjectRequests(obj, iObj)
+	requests = getObject(obj, iObj, 'requests');
+	inference = requests.inference;
+	missing = requests.missing;
+	check = requests.check;
+	verification = requests.verification;
+	label = requests.label;
+end
+
 function highTrainingPhase (obj)
-% 	% --- Change the number of iterations of the MSOM
-% 	obj.MFI.MSOM.setParameters(10) ;
-% 	% --- Train again the MSOM with last data
-% 	obj.MFI.trainMSOM() ;
-% 	obj.MFI.MSOM.setParameters(1) ;
-end
-
-function bool = isPerformant (obj, idx)
-	perf = cell2mat(getCategory(obj, idx, 'perf'));
-	if perf >= getInfo('q') && perf < 1
-	% if obj.observed_categories{idx}.perf >= getInfo('q') && obj.observed_categories{idx}.perf < 1
-		bool = true;
-		% if obj.observed_categories{idx}.perf == 1 && obj.observed_categories{idx}.nb_inf < 7
-		% 	bool = false;
-		% end
-	else
-		bool = false;
-	end
-end
-
-
-function computeCategoryPerformance (obj)
-	for iClass = 1:numel(obj.observed_categories)
-		obj.observed_categories{iClass}.perf = obj.observed_categories{iClass}.nb_goodInf/...
-											   obj.observed_categories{iClass}.nb_inf ;
-
-		if isnan(obj.observed_categories{iClass}.perf) || isinf(obj.observed_categories{iClass}.perf)
-			obj.observed_categories{iClass}.perf = 0 ;
-		end
-
-		obj.observed_categories{iClass}.proba = obj.observed_categories{iClass}.cpt/numel(obj.objects) ;
-
-		if isnan(obj.observed_categories{iClass}.proba) || isinf(obj.observed_categories{iClass}.proba)
-			obj.observed_categories{iClass}.proba = 0 ;
-		end
-	end
-end
-
-% function computeCategoryProba (obj)
-% 	for iClass = 1:numel(obj.observed_categories)
-% 		obj.observed_categories{iClass}.proba = obj.observed_categories{iClass}.cpt/numel(obj.objects) ;
-
-% 		if isnan(obj.observed_categories{iClass}.proba) || isinf(obj.observed_categories{iClass}.proba)
-% 			obj.observed_categories{iClass}.proba = 0 ;
-% 		end
-% 	end
-% end
-
-
-function reinitializeClasses (obj)
-	for iClass = 1:numel(obj.observed_categories)
-		obj.observed_categories{iClass}.cpt = 0 ;
-	end
-end
-
-function categorizeObjects (obj)
-
-	obj.reinitializeClasses() ;
-	for iObj = 1:numel(obj.objects)
-		if obj.objects{iObj}.cat > 0
-			obj.observed_categories{obj.objects{iObj}.cat}.cpt = obj.observed_categories{obj.objects{iObj}.cat}.cpt + 1 ;
-		else
-			obj.observed_categories{1}.cpt = obj.observed_categories{1}.cpt + 1 ;
-		end
-	end
-
-	cpts = cell2mat(arrayfun(@(x) obj.observed_categories{x}.cpt > 0,...
-							 1:numel(obj.observed_categories),...
-							 'UniformOutput', false)) ;
-	obj.nb_classes = sum(cpts) ;
-
-end
-
-function countObjects (obj)
-	for iObj = 1:numel(obj.objects)
-		if iObj ~= obj.present_objects
-            data = retrieveObservedData(obj, iObj, 'best');
-			AVClass = obj.MFI.inferCategory(data) ;
-			obj.objects{iObj}.setLabel(AVClass) ;
-			search = find(strcmp(AVClass, obj.labels)) ;
-			obj.objects{iObj}.cat = search ;
-		end
-	end
+	% --- Change the number of iterations of the MSOM
+	obj.MFI.MSOM.setParameters(20);
+	% --- Train again the MSOM with last data
+	obj.MFI.trainMSOM();
+	obj.MFI.MSOM.setParameters(getInfo('nb_iterations'));
 end
 
 function computePresence (obj)
-	obj.present_objects = [] ;
-	for iObj = 1:numel(obj.objects)
-		if obj.objects{iObj}.presence
-			obj.present_objects(end+1) = iObj;
-		end
-	end
-end
-
-function computeWeights (obj)
-	% for iObj = 1:numel(obj.objects)
-	for iObj = obj.present_objects
-		obj_cat = obj.objects{iObj}.cat;
-		if obj_cat ~= 0
-		% --- Compute weights thanks to weighting functions
-			% --- Incongruent
-			if obj.observed_categories{obj_cat}.proba <= 1/obj.nb_classes
-				increaseObjectWeight(obj.objects{iObj});
-			% --- Congruent
-			else
-				decreaseObjectWeight(obj.objects{iObj});
-			end
-		end
+	obj.present_objects = find(getObject(obj, 'all', 'presence'));
+	if isempty(obj.present_objects)
+		obj.present_objects = [];
 	end
 end
 
 function request = getCategories (obj, varargin)
 	if nargin == 1
-		request = obj.observed_categories ;
+		request = obj.observed_categories;
 	elseif nargin == 2
 		if isstr(varargin{1})
 			request = arrayfun(@(x) obj.observed_categories{x}.(varargin{1}),...
 							   1:numel(obj.observed_categories),...
-							   'UniformOutput', false) ;
+							   'UniformOutput', false);
 		else
-			request = arrayfun(@(x) obj.observed_categories{x}, varargin{1}) ;
+			request = arrayfun(@(x) obj.observed_categories{x}, varargin{1});
 		end
 	else
 		if isstr(varargin{1})
-			field = varargin{1} ;
-			idx = varargin{2} ;
+			field = varargin{1};
+			idx = varargin{2};
 		else
-			idx = varargin{1} ;
-			field = varargin{2} ;
+			idx = varargin{1};
+			field = varargin{2};
 		end
-		request = arrayfun(@(x) obj.observed_categories{x}.(field), idx) ;
+		request = arrayfun(@(x) obj.observed_categories{x}.(field), idx, 'UniformOutput', false);
+	end
+end
+
+function terminate (obj)
+	if obj.behavior ~= numel(obj.RIR.environments)
+		obj.DW = obj.temp_dw;
+	% 	obj.DW.source_env = obj.DW.source_env;
+	% else
+	end
+	obj.DW.source_env(end+1) = numel(obj.RIR.environments);
+	if obj.DW.source_env(1) == 0
+		obj.DW.source_env = obj.DW.source_env(2:end);
 	end
 end
 
 
-function updateObjects (obj, tmIdx)
-	% obj.counter = obj.counter + 1 ;
+function updateEnvironment (obj, tmIdx)
 	
-	obj.objects{end}.updateTime(tmIdx);
-
-	% obj.trainMSOM() ;
-
 	obj.computePresence();
+	
+	% obj.DW.setClasses();
 
-	% obj.labels = arrayfun(@(x) obj.observed_categories{x}.label,...
-	% 				  	  1:numel(obj.observed_categories),...
-	% 				  	  'UniformOutput', false);
-	obj.labels = getCategory(obj, 'all', 'label');
-
-	obj.setClasses();
+	obj.MFI.setClasses();
 
 	obj.checkInference();
 
-	obj.categorizeObjects();
+	if obj.behavior == numel(obj.RIR.environments)
+		obj.DW.execute();
+		obj.DW.computeWeights();
+	else
+		obj.DW.execute();
+		obj.temp_dw.execute();
+		obj.temp_dw.computeWeights();
+		% obj.DW.computeWeights();
+	end
 
-	obj.countObjects();
-
-	obj.computeCategoryPerformance();
-
-	% obj.computeCategoryProba() ;
-
-	obj.computeWeights();
+	% dw = getEnvironment(obj.htm, obj.behavior, 'DW');
+	% dw.computeWeights();
 	
-	arrayfun(@(x) obj.objects{x}.updateObj(), obj.present_objects);
+	arrayfun(@(x) obj.objects{x}.updateObj(), obj.present_objects');
 		
 end
 	
 end
-
+% ===================== %
+% === METHODS [END] === %
+% ===================== %
 end
+% =================== %
+% === END OF FILE === %
+% =================== %
